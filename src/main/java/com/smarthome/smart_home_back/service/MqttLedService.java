@@ -1,4 +1,3 @@
-
 package com.smarthome.smart_home_back.service;
 
 import jakarta.annotation.PostConstruct;
@@ -64,6 +63,7 @@ public class MqttLedService {
                     @Override
                     public void messageArrived(
                             String topic, MqttMessage message) {
+
                         String payload = new String(
                                 message.getPayload(),
                                 StandardCharsets.UTF_8
@@ -71,6 +71,7 @@ public class MqttLedService {
 
                         lastMessage = payload;
                         lastMessageTime = Instant.now().toString();
+
                         processStatus(payload);
                     }
 
@@ -99,6 +100,7 @@ public class MqttLedService {
         } catch (MqttException e) {
             lastMessage = "MQTT no disponible: " + e.getMessage();
             lastMessageTime = Instant.now().toString();
+
             System.err.println(lastMessage);
             return false;
         }
@@ -118,6 +120,7 @@ public class MqttLedService {
         MqttMessage message = new MqttMessage(
                 command.getBytes(StandardCharsets.UTF_8)
         );
+
         message.setQos(1);
         message.setRetained(false);
 
@@ -134,13 +137,19 @@ public class MqttLedService {
     public void controlLed(int led, boolean turnOn)
             throws MqttException {
 
-        if (led != 1) {
+        String command;
+
+        if (led == 1) {
+            command = turnOn ? "LED_ON" : "LED_OFF";
+        } else if (led == 2) {
+            command = turnOn ? "LED2_ON" : "LED2_OFF";
+        } else {
             throw new IllegalArgumentException(
-                    "Solo está configurado el LED integrado del Arduino UNO (LED 1)"
+                    "LED no válido. Utiliza LED 1 o LED 2."
             );
         }
 
-        publishCommand(turnOn ? "LED_ON" : "LED_OFF");
+        publishCommand(command);
     }
 
     private void processStatus(String payload) {
@@ -150,6 +159,12 @@ public class MqttLedService {
 
             case "LED_OFF_OK" ->
                     ledStates.put(1, "APAGADO");
+
+            case "LED2_ON_OK" ->
+                    ledStates.put(2, "ENCENDIDO");
+
+            case "LED2_OFF_OK" ->
+                    ledStates.put(2, "APAGADO");
 
             default -> {
                 // Se conserva el mensaje para diagnóstico.
@@ -163,6 +178,8 @@ public class MqttLedService {
                 client != null && client.isConnected(),
                 "led1",
                 ledStates.getOrDefault(1, "DESCONOCIDO"),
+                "led2",
+                ledStates.getOrDefault(2, "DESCONOCIDO"),
                 "lastMessage",
                 lastMessage,
                 "lastMessageTime",
@@ -177,6 +194,7 @@ public class MqttLedService {
                 if (client.isConnected()) {
                     client.disconnect();
                 }
+
                 client.close();
             }
         } catch (MqttException e) {
