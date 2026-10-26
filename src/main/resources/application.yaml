@@ -4,8 +4,8 @@ spring:
 
   datasource:
     url: "jdbc:postgresql://${DB_HOST:127.0.0.1}:${DB_PORT:5432}/smart_home"
-    username: ${DB_USER}
-    password: ${DB_PASSWORD}
+    username: postgres
+    password: "manuel59"
     driver-class-name: org.postgresql.Driver
 
   jpa:
