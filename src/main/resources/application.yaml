@@ -25,7 +25,8 @@ app:
   initial-user-password: ${APP_INITIAL_PASSWORD:}
 
   mqtt:
-    broker-url: tcp://127.0.0.1:1883
-    client-id: smart-home-backend
-    command-topic: smart_home/esp32/command
-    status-topic: smart_home/esp32/status
+    enabled: ${MQTT_ENABLED:true}
+    broker-url: ${MQTT_BROKER:tcp://127.0.0.1:1883}
+    client-id: ${MQTT_CLIENT_ID:smart-home-backend}
+    username: ${MQTT_USERNAME:}
+    password: ${MQTT_PASSWORD:}
