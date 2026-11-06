@@ -18,8 +18,7 @@ public class CorsConfig {
                         .allowedOrigins(
                                 "http://localhost:4200",
                                 "http://127.0.0.1:4200",
-                                "https://smarthome.aeropuertolosprimos.me",
-                                "https://prueba.aeropuertolosprimos.me"
+                                "https://thehome.aeropuertolosprimos.me"
                         )
                         .allowedMethods(
                                 "GET", "POST", "PUT", "DELETE", "OPTIONS"

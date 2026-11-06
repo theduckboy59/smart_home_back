@@ -20,8 +20,7 @@ public class AutorizacionConfig extends OncePerRequestFilter {
     private static final Set<String> FRONTENDS = Set.of(
             "http://localhost:4200",
             "http://127.0.0.1:4200",
-            "https://smarthome.aeropuertolosprimos.me",
-            "https://prueba.aeropuertolosprimos.me");
+            "https://thehome.aeropuertolosprimos.me");
 
     private final SesionService sesionService;
 
