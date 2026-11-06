@@ -20,6 +20,9 @@ public class UsuarioInicializador implements CommandLineRunner {
     @Value("${app.initial-user-password:}")
     private String contrasenaInicial;
 
+    @Value("${app.admin-user-name:postgres}")
+    private String nombreAdministrador;
+
     public UsuarioInicializador(
             UsuarioRepository usuarioRepository,
             PasswordEncoder passwordEncoder) {
@@ -29,13 +32,18 @@ public class UsuarioInicializador implements CommandLineRunner {
 
     @Override
     public void run(String... args) {
-        if (nombreInicial == null || nombreInicial.isBlank()
-                || contrasenaInicial == null
-                || contrasenaInicial.isBlank()) {
-            return;
+        if (nombreAdministrador != null && !nombreAdministrador.isBlank()) {
+            usuarioRepository.findByNombre(nombreAdministrador).ifPresent(usuario -> {
+                if (!Boolean.TRUE.equals(usuario.getAdministrador())) {
+                    usuario.setAdministrador(true);
+                    usuarioRepository.save(usuario);
+                }
+            });
         }
 
-        if (usuarioRepository.existsByNombre(nombreInicial)) {
+        if (nombreInicial == null || nombreInicial.isBlank()
+                || contrasenaInicial == null || contrasenaInicial.isBlank()
+                || usuarioRepository.existsByNombre(nombreInicial)) {
             return;
         }
 
@@ -44,6 +52,7 @@ public class UsuarioInicializador implements CommandLineRunner {
         usuario.setContrasena(
                 passwordEncoder.encode(contrasenaInicial)
         );
+        usuario.setAdministrador(nombreInicial.equals(nombreAdministrador));
 
         usuarioRepository.save(usuario);
 

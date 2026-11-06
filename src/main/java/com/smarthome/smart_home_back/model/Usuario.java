@@ -26,4 +26,18 @@ public class Usuario {
 
     @Column(nullable = false, length = 255)
     private String contrasena;
+
+    @Column(name = "passwordapp", length = 255)
+    private String passwordapp;
+
+    @Column(name = "passwordpuerta", length = 255)
+    private String passwordpuerta;
+
+    // Nullable to keep the schema update compatible with existing rows.
+    @Column(name = "administrador")
+    private Boolean administrador = false;
+
+    // Existing records with NULL remain enabled during the schema migration.
+    @Column(name = "activo")
+    private Boolean activo = true;
 }

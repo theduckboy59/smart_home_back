@@ -12,19 +12,22 @@ public class AuthService {
 
     private final UsuarioRepository usuarioRepository;
     private final PasswordEncoder passwordEncoder;
+    private final SesionService sesionService;
 
     public AuthService(
             UsuarioRepository usuarioRepository,
-            PasswordEncoder passwordEncoder) {
+            PasswordEncoder passwordEncoder,
+            SesionService sesionService) {
         this.usuarioRepository = usuarioRepository;
         this.passwordEncoder = passwordEncoder;
+        this.sesionService = sesionService;
     }
 
     public LoginResponse autenticar(String nombre, String contrasena) {
         Usuario usuario = usuarioRepository.findByNombre(nombre)
                 .orElse(null);
 
-        if (usuario == null ||
+        if (usuario == null || Boolean.FALSE.equals(usuario.getActivo()) ||
                 !passwordEncoder.matches(
                         contrasena,
                         usuario.getContrasena())) {
@@ -32,15 +35,21 @@ public class AuthService {
                     false,
                     "Credenciales incorrectas",
                     null,
+                    null,
+                    null,
                     null
             );
         }
+
+        String token = sesionService.crear(usuario);
 
         return new LoginResponse(
                 true,
                 "Autenticacion correcta",
                 usuario.getId(),
-                usuario.getNombre()
+                usuario.getNombre(),
+                token,
+                SesionService.EXPIRATION_SECONDS
         );
     }
 }

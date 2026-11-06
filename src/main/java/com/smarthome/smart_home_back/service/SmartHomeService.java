@@ -2,6 +2,7 @@ package com.smarthome.smart_home_back.service;
 
 import com.smarthome.smart_home_back.mqtt.MqttTransport;
 import com.smarthome.smart_home_back.mqtt.PahoMqttTransport;
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -12,10 +13,12 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Service
@@ -34,6 +37,14 @@ public class SmartHomeService {
 
     private final MqttTransport mqtt;
     private final Clock clock;
+    private final MqttEventProcessor eventProcessor;
+
+    private final Object queueLock = new Object();
+    private final PriorityQueue<QueuedCommand> commandQueue = new PriorityQueue<>(
+            java.util.Comparator.comparingInt(QueuedCommand::priority)
+                    .thenComparingLong(QueuedCommand::sequence));
+    private final AtomicLong commandSequence = new AtomicLong();
+    private boolean dispatching;
 
     private final AtomicReference<Pending> pending =
             new AtomicReference<>();
@@ -58,6 +69,14 @@ public class SmartHomeService {
     ) {
     }
 
+    private record QueuedCommand(int priority, long sequence, Command command,
+                                 CompletableFuture<Map<String, Object>> response) {
+    }
+
+    public enum CommandAuthorization {
+        ACCESS_PIN, PERIMETER_ALARM, ALARM_REARM
+    }
+
     public record Command(
             String id,
             String accion,
@@ -77,10 +96,11 @@ public class SmartHomeService {
     }
 
     @Autowired
-    public SmartHomeService(MqttTransport mqtt) {
+    public SmartHomeService(MqttTransport mqtt, MqttEventProcessor eventProcessor) {
         this(
                 mqtt,
-                Clock.systemUTC()
+                Clock.systemUTC(),
+                eventProcessor
         );
     }
 
@@ -89,8 +109,15 @@ public class SmartHomeService {
             Clock clock
     ) {
 
+        this(mqtt, clock, null);
+    }
+
+    private SmartHomeService(MqttTransport mqtt, Clock clock,
+                             MqttEventProcessor eventProcessor) {
+
         this.mqtt = mqtt;
         this.clock = clock;
+        this.eventProcessor = eventProcessor;
 
         mqtt.setReceiver(
                 this::receive
@@ -100,6 +127,10 @@ public class SmartHomeService {
     public Status status() {
 
         Sample current = sample;
+        boolean busy;
+        synchronized (queueLock) {
+            busy = pending.get() != null || dispatching || !commandQueue.isEmpty();
+        }
 
         boolean fresh =
                 current != null
@@ -116,7 +147,7 @@ public class SmartHomeService {
                 mqtt.connected(),
                 online,
                 online,
-                pending.get() != null,
+                busy,
                 current == null
                         ? null
                         : current.at().toString(),
@@ -264,6 +295,84 @@ public class SmartHomeService {
 
         validate(command);
 
+        if (isSensitive(command)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Esta operación requiere autorización de seguridad");
+        }
+        return enqueue(command, 100);
+    }
+
+    public CompletableFuture<Map<String, Object>> commandAuthorized(
+            Command command, CommandAuthorization authorization) {
+        validate(command);
+        boolean allowed = switch (command.id()) {
+            case "puerta" -> authorization == CommandAuthorization.ACCESS_PIN
+                    && command.accion().equals("estado")
+                    && integer(command.valor()) == 1;
+            case "alarma" -> (authorization == CommandAuthorization.PERIMETER_ALARM
+                    && command.accion().equals("estado")
+                    && integer(command.valor()) == 1)
+                    || (authorization == CommandAuthorization.ALARM_REARM
+                    && command.accion().equals("estado")
+                    && integer(command.valor()) == 0);
+            default -> false;
+        };
+        if (!allowed) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "La autorización no permite esta operación");
+        }
+        int priority = command.id().equals("alarma") && integer(command.valor()) == 1 ? 0 : 50;
+        return enqueue(command, priority);
+    }
+
+    private CompletableFuture<Map<String, Object>> enqueue(Command command, int priority) {
+        CompletableFuture<Map<String, Object>> response = new CompletableFuture<>();
+        synchronized (queueLock) {
+            if (commandQueue.size() >= 100) {
+                throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS,
+                        "La cola de comandos está llena");
+            }
+            commandQueue.add(new QueuedCommand(priority, commandSequence.incrementAndGet(), command, response));
+        }
+        dispatchNext();
+        return response;
+    }
+
+    private void dispatchNext() {
+        QueuedCommand next;
+        synchronized (queueLock) {
+            if (dispatching || commandQueue.isEmpty()) return;
+            dispatching = true;
+            next = commandQueue.poll();
+        }
+        CompletableFuture<Map<String, Object>> execution;
+        try {
+            execution = executeNow(next.command());
+        } catch (Exception error) {
+            next.response().completeExceptionally(error);
+            finishDispatch();
+            return;
+        }
+        execution.whenComplete((result, error) -> {
+            if (error != null) next.response().completeExceptionally(error);
+            else next.response().complete(result);
+            finishDispatch();
+        });
+    }
+
+    private void finishDispatch() {
+        synchronized (queueLock) {
+            dispatching = false;
+        }
+        dispatchNext();
+    }
+
+    private static boolean isSensitive(Command command) {
+        return command.id().equals("puerta") || command.id().equals("alarma");
+    }
+
+    private CompletableFuture<Map<String, Object>> executeNow(Command command) {
+
         Status status =
                 status();
 
@@ -287,6 +396,12 @@ public class SmartHomeService {
                     HttpStatus.SERVICE_UNAVAILABLE,
                     "ESP32 o Arduino sin datos recientes"
             );
+        }
+
+        if (command.id().equals("puerta") && integer(command.valor()) == 1
+                && status.estado().path("uno1").path("alarma").path("estado").asInt(0) == 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "La alarma está activa; la puerta permanece bloqueada");
         }
 
         if (
@@ -548,42 +663,26 @@ public class SmartHomeService {
                             );
                 }
 
-            } else if (
-                    topic.equals(
-                            PahoMqttTransport.ROOT
-                                    + "event"
-                    )
-                            &&
-                            data.path("tipo")
-                                    .asText()
-                                    .equals("tecla")
-            ) {
-
-                String key =
-                        data.path("tecla")
-                                .asText();
-
-                if (
-                        key.matches(
-                                "[0-9A-D*#]"
-                        )
-                ) {
-
-                    lastEvent =
-                            Map.of(
-                                    "tecla",
-                                    key,
-
-                                    "contador",
-                                    data.path(
-                                                    "contador"
-                                            )
-                                            .asInt(),
-
-                                    "receivedAt",
-                                    clock.instant()
-                                            .toString()
-                            );
+            } else if (topic.equals(PahoMqttTransport.ROOT + "event")) {
+                String type = data.path("tipo").asText();
+                if (type.equals("tecla")) {
+                    String key = data.path("tecla").asText();
+                    if (key.matches("[0-9A-D*#]")) {
+                        lastEvent = Map.of("tecla", key,
+                                "contador", data.path("contador").asInt(),
+                                "receivedAt", clock.instant().toString());
+                    }
+                } else if (eventProcessor != null && type.equals("pin_puerta")) {
+                    JsonNode code = data.path("codigo");
+                    eventProcessor.pin(code.isString() ? code.asText() : null);
+                } else if (eventProcessor != null && type.equals("distancia")) {
+                    boolean valid = data.path("valida").isBoolean() && data.path("valida").asBoolean();
+                    JsonNode cm = data.path("cm");
+                    long centimeters = cm.asLong(-1);
+                    boolean integer = (cm.isInt() || cm.isLong())
+                            && centimeters >= 0 && centimeters <= 500;
+                    eventProcessor.distance(valid && integer,
+                            integer ? (int) centimeters : -1);
                 }
             }
 
@@ -591,6 +690,15 @@ public class SmartHomeService {
 
             // Mensajes MQTT inválidos no deben
             // derribar el callback.
+        }
+    }
+
+    @PreDestroy
+    private void shutdown() {
+        synchronized (queueLock) {
+            commandQueue.forEach(item -> item.response().completeExceptionally(
+                    new IllegalStateException("Backend detenido")));
+            commandQueue.clear();
         }
     }
 }

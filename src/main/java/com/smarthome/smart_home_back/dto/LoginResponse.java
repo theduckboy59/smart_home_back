@@ -4,6 +4,8 @@ public record LoginResponse(
         boolean autenticado,
         String mensaje,
         Long usuarioId,
-        String nombre
+        String nombre,
+        String accessToken,
+        Long expiresIn
 ) {
 }

@@ -59,7 +59,7 @@ public class LedController {
                     HttpStatus.SERVICE_UNAVAILABLE
             ).body(Map.of(
                     "success", false,
-                    "message", "No se pudo enviar el comando MQTT"
+                    "message", "El firmware actual no admite la API heredada de LED"
             ));
 
         } catch (IllegalArgumentException e) {
